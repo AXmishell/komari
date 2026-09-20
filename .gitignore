@@ -36,5 +36,7 @@ go.work.sum
 komari
 /dist/
 .codex
+.codegraph
+.omo
 
 /web/filemanager/data
