@@ -6,13 +6,13 @@
 #
 # Requirements: git, node, npm, go.
 # Environment overrides:
-#   KOMARI_WEB_REPO  git URL of the frontend (default: komari-monitor/komari-web)
+#   KOMARI_WEB_REPO  git URL of the frontend (default: AXmishell/komari-web)
 #   KOMARI_WEB_REF   branch/tag/sha to build (default: repository default branch)
 #   KOMARI_WEB_DIR   work directory (default: a fresh temp directory)
 
 set -euo pipefail
 
-REPO_URL="${KOMARI_WEB_REPO:-https://github.com/komari-monitor/komari-web}"
+REPO_URL="${KOMARI_WEB_REPO:-https://github.com/AXmishell/komari-web}"
 REF="${KOMARI_WEB_REF:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

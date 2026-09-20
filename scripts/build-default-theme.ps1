@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not $Repo) { $Repo = "https://github.com/komari-monitor/komari-web" }
+if (-not $Repo) { $Repo = "https://github.com/AXmishell/komari-web" }
 $root = Split-Path -Parent $PSScriptRoot
 
 if (-not $WorkDir) {
