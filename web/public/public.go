@@ -34,6 +34,32 @@ const (
 	IndexFile = "index.html" // 相对于 DistDir
 )
 
+// staticAssetExtensions 列出静态资源文件的扩展名。对这类路径，若在主题中
+// 找不到对应文件，必须返回 404，绝不能回退到 index.html：把一个 HTML 文档
+// 当作 JS/CSS 返回会触发浏览器对 module script 的严格 MIME 校验
+// （"Expected a JavaScript-or-Wasm module script but the server responded with
+// a MIME type of \"text/html\""），表现为动态 import 失败、管理端白屏。
+// 使用白名单而不是"任意扩展名"是为了不误伤形如 /instance/example.com 的 SPA 路由。
+var staticAssetExtensions = map[string]struct{}{
+	".js": {}, ".mjs": {}, ".cjs": {}, ".jsx": {},
+	".css": {}, ".map": {},
+	".json": {}, ".webmanifest": {},
+	".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".svg": {},
+	".webp": {}, ".avif": {}, ".bmp": {}, ".ico": {},
+	".woff": {}, ".woff2": {}, ".ttf": {}, ".otf": {}, ".eot": {},
+	".wasm": {}, ".txt": {}, ".xml": {},
+}
+
+// isStaticAssetRequest 判断请求路径是否指向一个静态资源文件（按扩展名）。
+func isStaticAssetRequest(requestPath string) bool {
+	ext := strings.ToLower(filepath.Ext(requestPath))
+	if ext == "" {
+		return false
+	}
+	_, ok := staticAssetExtensions[ext]
+	return ok
+}
+
 func init() {
 	_ = os.MkdirAll("./data/theme", 0755)
 
@@ -200,6 +226,9 @@ func static(r *gin.RouterGroup, noRoute func(handlers ...gin.HandlerFunc), force
 
 	// 核心逻辑：渲染 Index.html
 	serveIndex := func(c *gin.Context) {
+		// index.html 是入口 HTML，绝不能缓存：一旦浏览器或代理持有旧版本，
+		// 它就会去请求已被新构建淘汰的 hash 资源，最终白屏。始终要求重新校验。
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		reqPath := c.Request.URL.Path
 		cfg := getConfig()
 
@@ -355,13 +384,13 @@ func static(r *gin.RouterGroup, noRoute func(handlers ...gin.HandlerFunc), force
 			return
 		}
 
-		// 如果资源不存在，且路径包含扩展名 (如 .js, .css, .png)，则返回 404
-		// 避免将 index.html 作为 js 文件返回导致 "Failed to fetch dynamically imported module"
-		//ext := filepath.Ext(reqPath)
-		//if ext != "" && ext != ".html" {
-		//	c.Status(http.StatusNotFound)
-		//	return
-		//}
+		// 静态资源未命中：返回 404，绝不能回退到 index.html。
+		// 否则浏览器会把 HTML 当作模块加载，报
+		// "Failed to load module script: ... MIME type of \"text/html\"" 并白屏。
+		if isStaticAssetRequest(reqPath) {
+			c.Status(http.StatusNotFound)
+			return
+		}
 
 		// 路由 (如 /dashboard, /settings) -> 返回 index.html
 		serveIndex(c)

@@ -2,6 +2,7 @@ package public
 
 import (
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -135,5 +136,82 @@ func TestStaticRestrictedDoesNotServeCustomAssetOverride(t *testing.T) {
 	}
 	if strings.Contains(string(indexBody), `vite-plugin-pwa:register-sw`) {
 		t.Fatal("restricted index still registers a service worker")
+	}
+}
+
+func newPublicRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open config db: %v", err)
+	}
+	config.SetDb(db)
+
+	router := gin.New()
+	Static(router.Group("/"), func(handlers ...gin.HandlerFunc) {
+		router.NoRoute(handlers...)
+	})
+	return router
+}
+
+// Missing static assets must 404 instead of falling back to index.html. Serving
+// HTML for a .js/.css request makes the browser reject the module script with a
+// strict MIME type error and leaves the admin UI blank.
+func TestNoRouteReturns404ForMissingAssets(t *testing.T) {
+	router := newPublicRouter(t)
+
+	for _, requestPath := range []string{
+		"/assets/rolldown-runtime-missing.js",
+		"/assets/chunk-_layout-missing.js",
+		"/assets/themeSettings-missing.js",
+		"/assets/missing.css",
+		"/assets/missing.webmanifest",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestPath, nil))
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", requestPath, recorder.Code)
+		}
+		if contentType := recorder.Header().Get("Content-Type"); strings.Contains(contentType, "text/html") {
+			t.Fatalf("%s served text/html (%q) for a missing asset", requestPath, contentType)
+		}
+	}
+}
+
+// SPA routes (including a node name that contains a dot) must still fall back to
+// index.html, not be mistaken for static assets and 404'd.
+func TestNoRouteServesIndexForSPARoutes(t *testing.T) {
+	router := newPublicRouter(t)
+
+	for _, requestPath := range []string{"/", "/dashboard", "/admin", "/admin/dashboard", "/instance/example.com"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestPath, nil))
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", requestPath, recorder.Code)
+		}
+		if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/html") {
+			t.Fatalf("%s content-type = %q, want text/html", requestPath, contentType)
+		}
+	}
+}
+
+// The entry index.html must never be cached: a stale copy points at hashed
+// assets that no longer exist in the current build and causes a blank page.
+func TestServeIndexIsNotCacheable(t *testing.T) {
+	router := newPublicRouter(t)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	cacheControl := recorder.Header().Get("Cache-Control")
+	if !strings.Contains(cacheControl, "no-store") || !strings.Contains(cacheControl, "no-cache") {
+		t.Fatalf("Cache-Control = %q, want no-store and no-cache", cacheControl)
 	}
 }

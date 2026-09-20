@@ -9,9 +9,9 @@
 ### Build Requirements
 
 1. Clone the frontend repository and build the static files
-2. Pack the generated `dist` directory as `tar + zstd -19` to `web/public/defaultTheme/dist.tar.zst` in the backend repository
-3. Copy `komari-theme.json` to `web/public/defaultTheme` if you want the default theme metadata and managed configuration to be available
-4. Ensure `web/public/defaultTheme/dist.tar.zst` contains `index.html` before building the backend
+2. Pack the generated `dist` directory into `web/public/defaultTheme/dist.tar.zst` with `go run ./cmd/pack-frontend` (it also copies `komari-theme.json`)
+3. The packer verifies that `index.html` and the ES module import graph only reference files present in the archive, and fails the build otherwise
+4. `scripts/build-default-theme.sh` (or `.ps1` on Windows) automates the whole clone + build + pack flow
 
 ### Important Note
 
@@ -28,9 +28,9 @@
 ### 构建要求
 
 1. 克隆前端仓库并构建静态文件
-2. 将生成的 `dist` 目录使用 `tar + zstd -19` 打包为后端仓库内的 `web/public/defaultTheme/dist.tar.zst`
-3. 如需让后台显示默认主题元数据和可管理配置，将 `komari-theme.json` 复制到 `web/public/defaultTheme`
-4. 构建后端前，确保 `web/public/defaultTheme/dist.tar.zst` 包含 `index.html`
+2. 用 `go run ./cmd/pack-frontend` 将生成的 `dist` 目录打包为 `web/public/defaultTheme/dist.tar.zst`（同时会复制 `komari-theme.json`）
+3. 打包工具会校验 `index.html` 与 ES module import 图只引用归档内存在的文件，不一致则直接失败
+4. `scripts/build-default-theme.sh`（Windows 为 `.ps1`）可一键完成 克隆 + 构建 + 打包
 
 ### 重要提醒
 
@@ -47,9 +47,9 @@
 ### ビルド要件
 
 1. フロントエンドリポジトリをクローンして静的ファイルをビルドする
-2. 生成された `dist` ディレクトリを `tar + zstd -19` で圧縮し、バックエンドリポジトリ内の `web/public/defaultTheme/dist.tar.zst` に配置する
-3. デフォルトテーマのメタデータと管理設定を利用する場合は、`komari-theme.json` を `web/public/defaultTheme` にコピーする
-4. バックエンドをビルドする前に、`web/public/defaultTheme/dist.tar.zst` に `index.html` が含まれていることを確認する
+2. 生成された `dist` ディレクトリを `go run ./cmd/pack-frontend` で `web/public/defaultTheme/dist.tar.zst` にパックする（`komari-theme.json` もコピーされる）
+3. パッカーは `index.html` と ES module の import グラフが参照するファイルがすべてアーカイブ内に存在するか検証し、不一致なら失敗する
+4. `scripts/build-default-theme.sh`（Windows は `.ps1`）でクローン + ビルド + パックを一括実行できる
 
 ### 重要な注意事項
 
@@ -60,18 +60,23 @@
 ## Quick Setup / 快速设置 / クイックセットアップ
 
 ```bash
-# Clone frontend repository / 克隆前端仓库 / フロントエンドリポジトリをクローン
+# One command from the backend repo root / 在后端仓库根目录一条命令完成 / バックエンドリポジトリのルートで1コマンド
+bash scripts/build-default-theme.sh
+# Windows (PowerShell): pwsh scripts/build-default-theme.ps1
+
+# Or do it manually / 或手动执行 / または手動で実行
 git clone https://github.com/komari-monitor/komari-web
 cd komari-web
-
-# Install dependencies and build / 安装依赖并构建 / 依存関係をインストールしてビルド
 npm install
 npm run build
+cd ..
 
-# Pack frontend assets into the backend embed archive / 打包到后端 embed 归档 / バックエンドの embed アーカイブに圧縮
-mkdir -p /path/to/komari/web/public/defaultTheme
-tar -cf /tmp/komari-dist.tar -C dist .
-zstd -19 -T0 -f /tmp/komari-dist.tar -o /path/to/komari/web/public/defaultTheme/dist.tar.zst
-rm -f /tmp/komari-dist.tar
-cp komari-theme.json /path/to/komari/web/public/defaultTheme/
+# Pack + verify into the embed archive / 打包并校验 / パックして検証
+go run ./cmd/pack-frontend \
+  -dist komari-web/dist \
+  -out web/public/defaultTheme/dist.tar.zst \
+  -theme komari-web/komari-theme.json
+
+# The same check runs in CI / 同样的校验在 CI 中执行 / 同じ検証が CI で実行される
+go test ./web/public/ -run TestEmbeddedFrontendIsSelfConsistent -count=1
 ```
