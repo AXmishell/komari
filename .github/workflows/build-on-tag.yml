@@ -1,0 +1,192 @@
+name: Build on Tag Push
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version/tag to build and publish. Defaults to the selected ref.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build frontend artifact
+        uses: ./.github/actions/build-frontend
+        with:
+          artifact-name: komari-frontend
+
+  build-binaries:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows
+          - goos: windows
+            goarch: amd64
+            zig_target_triple: x86_64-windows-gnu
+            binary_extension: .exe
+          - goos: windows
+            goarch: arm64
+            zig_target_triple: aarch64-windows-gnu
+            binary_extension: .exe
+          - goos: windows
+            goarch: 386
+            zig_target_triple: x86-windows-gnu
+            binary_extension: .exe
+
+          # Linux
+          - goos: linux
+            goarch: amd64
+            zig_target_triple: x86_64-linux-musl
+            binary_extension: ""
+          - goos: linux
+            goarch: arm64
+            zig_target_triple: aarch64-linux-musl
+            binary_extension: ""
+          - goos: linux
+            goarch: 386
+            zig_target_triple: x86-linux-musl
+            binary_extension: ""
+          - goos: linux
+            goarch: riscv64
+            zig_target_triple: riscv64-linux-musl
+            binary_extension: ""
+          - goos: linux
+            goarch: loong64
+            zig_target_triple: loongarch64-linux-musl
+            binary_extension: ""
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore frontend artifact
+        uses: ./.github/actions/restore-frontend
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Zig cross-compiler toolchain
+        uses: ./.github/actions/setup-zig
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${DISPATCH_VERSION:-}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: zig cc -target ${{ matrix.zig_target_triple }}
+          GIN_MODE: release
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          BINARY_NAME="komari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.binary_extension }}"
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/komari-monitor/komari/utils.CurrentVersion=${VERSION} -X github.com/komari-monitor/komari/utils.VersionHash=${GITHUB_SHA}" \
+            -o "$BINARY_NAME"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: komari-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: komari-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.binary_extension }}
+          if-no-files-found: error
+
+  build-and-push-docker:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${DISPATCH_VERSION:-}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Download Docker binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: komari-linux-*
+          path: .
+          merge-multiple: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          no-cache: true
+          provenance: false
